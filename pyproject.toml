@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mycd"
+version = "0.0.1"
+authors = [
+  { name="flowpoint", email="flowpoint@protonmail.com" },
+]
+description = "a minimal build system tool"
+readme = "readme.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+keywords = ["key1"]
+license = {text = "MIT License"}
+dependencies = [
+    "click"
+]
+
+[project.optional-dependencies]
+dev = [
+    'ipython',
+    'python-lsp-server',
+    'mypy',
+]
+
+[project.scripts]
+mycd = "mycd.cli:main"
+
+#[project.urls]
+#"Homepage" = "https://github.com/pypa/sampleproject"
+#"Bug Tracker" = "https://github.com/pypa/sampleproject/issues"
+
+
