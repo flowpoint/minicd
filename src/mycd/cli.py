@@ -11,6 +11,7 @@ import lmdb
 
 RepoName = str
 Uri = str
+Commit: str
 
 def sprun(cmd: str):
     print(f'running command: {cmd}')
@@ -33,13 +34,14 @@ class Commit:
         self.uri = uri
 
     def dict(self):
-        return {"hash":self.hash, "uri": self.uri}
+        return {"hash":str(self.hash), "uri": self.uri}
 
 class Repo:
-    def __init__(self, uri: Uri, name=str(uuid4()), clonedir=None):
+    def __init__(self, uri: Uri, name=str(uuid4()), clonedir=None, commit=None):
         self.uri = uri
         self.name = name
         self.clonedir : Optional[Path] = clonedir
+        self.commit : Optional[Commit] = commit
 
     def clone(self, dest: Path):
         ''' clones repo '''
@@ -52,25 +54,29 @@ class Repo:
         else:
             print(f'clonedir exists, skipping clone')
 
+        self.commit = self.get_branch_tip()
+
     def checkout(self, branch: str):
         print('checking out branch')
         cmd = f'cd {self.clonedir} && git checkout {branch}'
         sprun(cmd)
+        self.commit = self.get_branch_tip()
 
     def pull(self):
         print('pulling branch')
         cmd = f'cd {self.clonedir} && git pull'
         sprun(cmd)
 
-    def get_branch_tip(self, branch: str):
-        cmd = f'cd {self.clonedir} && git rev-parse {branch}'
+    def get_branch_tip(self):
+        cmd = f'cd {self.clonedir} && git log -n 1 --pretty=format:"%H"'
         proc = sprun(cmd)
-        return Commit(proc.stdout, self.uri)
+        return proc.stdout
 
     def dict(self):
         return {"name":self.name, 
                 "uri": self.uri, 
-                "clonedir": self.clonedir}
+                "commit": str(self.commit),
+                "clonedir": str(self.clonedir)}
 
 
 # seed_uris = 'repouri'
@@ -84,37 +90,17 @@ class Repo:
 # buildrules = (downloaded_commit) -> build
 
 class Build:
-    def __init__(self, commit: Commit):
-        self.repo = Repo(commit.uri)
-        self.commit = commit
+    def __init__(self, repo: Repo, buildfn, reportfn):
+        self.repo = repo
         self.state = 'created'
-        db = BuildDB()
-        self.builddir = db.get_new_builddir()
-
-    def setup_builddir(self):
-        self.repo.clone(self.builddir)
-        self.repo.checkout(self.commit.hash)
-        print('setting up builddir')
-        #self.repo.clone(self.builddir)
-        #copytree(self.repo.clonedir, self.builddir)
-        pass
-
-    def cleanup(self):
-        print('cleaning up builddir')
-        #rmtree(self.builddir)
+        self.buildfn = buildfn
+        self.reportfn = reportfn
 
     def run(self):
-        print('starting build')
-        self.state = 'setting_up'
-        self.setup_builddir()
-        self.state = 'running'
+        self.buildfn()
+        self.reportfn(self)
 
-        cmd = f'cd {self.repo.clonedir} && ./ci.sh'
-        proc = sprun(cmd)
-        self.state = 'cleaning_up'
-        self.cleanup()
-        self.state = 'finished'
-
+    '''
     def start(self):
         pass
 
@@ -124,9 +110,10 @@ class Build:
         pass
     def cancel(self):
         pass
+    '''
 
     def dict(self):
-        return {"repo": self.repo.dict(), "commit": self.commit.dict()}
+        return {"repo": self.repo.dict(), "buildfn":""}
 
 class BuildDB(ABC):
     def __init__(self):
@@ -142,71 +129,80 @@ class BuildDB(ABC):
 class BuildLMDB(BuildDB):
     def __init__(self):
         super().__init__()
-        self.env = lmdb.open(self.path)
+        self.env = lmdb.open(str(self.path))
 
     def was_built(self, commit: Commit):
-        key = commit.hash
+        key = commit
         with self.env.begin(write=False) as txn:
             res = txn.get(str(key).encode('utf-8'))
             return res is not None
 
     def set_built(self, build: Build):
-        key = build.commit.hash
+        key = build.repo.commit
         value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
             return txn.put(str(key).encode('utf-8'), str(value).encode('utf-8'))
 
+db = BuildLMDB()
 
 class Crawler(ABC):
     def __init__(self):
         pass
 
     @abstractmethod
-    def crawl(self, seed) -> Commit:
+    def crawl(self, seed) -> Repo:
         pass
 
 class SimpleCrawler(Crawler):
+    ''' only returns the repo on the latest main branch commit '''
     def __init__(self):
         super().__init__()
     
-    def crawl(self, seed):
-        db = BuildDB()
+    def crawl(self, seed) -> Repo:
         r = Repo(seed)
         repodir = db.get_new_repodir()
         r.clone(repodir)
         r.checkout('main')
-        hash_ = r.get_branch_tip('main').hash
+        commit = r.commit
         rmtree(repodir)
-        return Commit(hash_, seed)
-
+        return r
 
 
 class BuildRule(ABC):
     def __init__(self):
         pass
 
-    def get(self, commit):
+    def get(self, repo):
         pass
 
 class SimpleBuildRule(BuildRule):
     def __init__(self):
         super().__init__()
 
-    def get(self, commit: Commit):
-        hash_ = commit.hash
-        uri = commit.uri
-
+    def get(self, repo: Repo) -> Build:
         def buildfn():
-            db = BuildDB()
-            r = Repo(uri)
+            commit = repo.commit
+
+            if db.was_built(commit):
+                print('commmit was already built, skipping')
+                return
+
             repodir = db.get_new_builddir()
-            r.clone(repodir)
-            r.checkout(hash_)
+            repo.clone(repodir)
+            repo.checkout(commit)
 
-            build = Build(commit)
-            build.run()
+            cmd = f'cd {repo.clonedir} && ./ci.sh'
+            proc = sprun(cmd)
 
-        return buildfn
+            # report
+            # cleanup
+
+        def reportfn(build):
+            db.set_built(build)
+
+        build = Build(repo, buildfn, reportfn)
+
+        return build
 
 
 @click.group()
@@ -215,6 +211,7 @@ class SimpleBuildRule(BuildRule):
 def cli(ctx, config):
     ctx.obj = config
     pass
+
 
 @cli.command()
 @click.pass_obj
@@ -232,8 +229,18 @@ def run(config):
         for cr in crawlers:
             commits.append(cr.crawl(s))
 
+    builds = []
     for cm in commits:
         for rule in buildrules:
-            r = rule.get(cm)
-            print(r)
-            r()
+            build = rule.get(cm)
+            builds.append(build)
+
+    for build in builds:
+        build.run()
+
+@cli.command()
+@click.argument('cmd')
+@click.pass_obj
+def builds(config, cmd):
+    with open(config, 'r') as f:
+        config = json.loads(f.read())
