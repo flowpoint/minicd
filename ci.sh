@@ -1,1 +1,1 @@
-pip install .[dev]
+pip wheel .

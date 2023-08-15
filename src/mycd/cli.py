@@ -89,8 +89,8 @@ class Build:
     def run(self):
         try:
             self.buildfn(self)
-            self.state = 'success'
-        except:
+        except Exception as e:
+            print(e)
             self.state = 'error'
 
     '''
@@ -142,7 +142,7 @@ class BuildLMDB(BuildDB):
                 return False
 
     def save_build(self, build: Build):
-        print('saving build')
+        print(f'saving build {build.repo.uri} {build.repo.commit} {build.state}')
         key = build.repo.commit
         value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
@@ -188,11 +188,13 @@ class SimpleBuildRule(BuildRule):
         def buildfn(build):
             commit = repo.commit
 
-            db.save_build(build)
-
             if db.was_built(commit):
                 print('commmit was already built, skipping')
                 return
+
+            build.state = 'running'
+            db.save_build(build)
+
 
             print('wasnt built')
 
@@ -204,6 +206,7 @@ class SimpleBuildRule(BuildRule):
             cmd = f'cd {repo.clonedir} && ./ci.sh > >(tee -a ../stdout.log) 2> >(tee -a ../stderr.log >&2)'
             proc = sprun(cmd)
 
+            build.state = 'success'
             db.save_build(build)
 
             # report
@@ -289,7 +292,7 @@ def config(ctx):
 def builds(ctx):
     fields = ['status', 'commit', 'repo']
     sep = '----'
-    spacings = [7, 40, 40]
+    spacings = [7, 42, 40]
     print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
     print(tjoin([padto(sep,l) for l in spacings]))
     for k, v in db.all_builds():
