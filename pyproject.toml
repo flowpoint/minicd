@@ -27,6 +27,7 @@ dev = [
     'ipython',
     'python-lsp-server',
     'mypy',
+    'lmdb'
 ]
 
 [project.scripts]
