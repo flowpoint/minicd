@@ -5,6 +5,7 @@ import subprocess
 from uuid import uuid4
 from typing import Union, Optional
 from abc import ABC, abstractmethod
+import os
 
 import click
 import lmdb
@@ -97,7 +98,11 @@ class Build:
         self.reportfn = reportfn
 
     def run(self):
-        self.buildfn()
+        try:
+            self.buildfn()
+            self.state = 'sucessful'
+        except:
+            self.state = 'error'
         self.reportfn(self)
 
     '''
@@ -113,7 +118,7 @@ class Build:
     '''
 
     def dict(self):
-        return {"repo": self.repo.dict(), "buildfn":""}
+        return {"repo": self.repo.dict(), "buildfn":"", 'state':self.state}
 
 class BuildDB(ABC):
     def __init__(self):
@@ -130,6 +135,13 @@ class BuildLMDB(BuildDB):
     def __init__(self):
         super().__init__()
         self.env = lmdb.open(str(self.path))
+
+    def all_builds(self):
+        with self.env.begin(write=False) as txn:
+            with txn.cursor() as curs:
+                for i in curs:
+                    yield i[0].decode('utf-8'), json.loads(i[1].decode('utf-8'))
+
 
     def was_built(self, commit: Commit):
         key = commit
@@ -191,7 +203,8 @@ class SimpleBuildRule(BuildRule):
             repo.clone(repodir)
             repo.checkout(commit)
 
-            cmd = f'cd {repo.clonedir} && ./ci.sh'
+            # run the ci script and write the logs to the build dir above the repo directory
+            cmd = f'cd {repo.clonedir} && ./ci.sh > >(tee -a ../stdout.log) 2> >(tee -a ../stderr.log >&2)'
             proc = sprun(cmd)
 
             # report
@@ -209,15 +222,15 @@ class SimpleBuildRule(BuildRule):
 @click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default='/tmp/nano_build_delivery.json')
 @click.pass_context
 def cli(ctx, config):
-    ctx.obj = config
-    pass
+    with open(config, 'r') as f:
+        configo = json.loads(f.read())
+    ctx.obj = {'config': configo, 'configpath': config}
 
 
 @cli.command()
-@click.pass_obj
-def run(config):
-    with open(config, 'r') as f:
-        config = json.loads(f.read())
+@click.pass_context
+def run(ctx):
+    config = ctx.obj['config']
 
     seeds = config['seeds']
     #seeds = ['/home/flowpoint/devel/testrepo']
@@ -238,9 +251,47 @@ def run(config):
     for build in builds:
         build.run()
 
-@cli.command()
-@click.argument('cmd')
-@click.pass_obj
-def builds(config, cmd):
-    with open(config, 'r') as f:
-        config = json.loads(f.read())
+@cli.group()
+#@click.argument('cmd')
+@click.pass_context
+def seed(ctx):
+    pass
+
+@seed.command()
+@click.argument('seed')
+@click.pass_context
+def add(ctx, seed):
+    p = ctx.obj['configpath']
+    nc = ctx.obj['config']
+    if seed in nc['seeds']:
+        print('seed already exists, aborting')
+    nc['seeds'] = nc['seeds'] + [seed]
+    nfp = p+'.new'
+    with open(nfp, 'w') as f:
+        f.write(json.dumps(nc))
+    copyfile(nfp, p)
+    os.remove(nfp)
+
+
+@cli.group()
+#@click.argument('cmd')
+@click.pass_context
+def builds(ctx):
+    pass
+
+@builds.command()
+#@click.argument('cmd')
+@click.pass_context
+def status(ctx):
+    for k, v in db.all_builds():
+        reponame = v['repo']['uri']
+        commit = v['repo']['commit']
+        state = v['state']
+        print(f'status: {state} repo: {reponame} commit {commit}')
+
+@builds.command()
+#@click.argument('cmd')
+@click.pass_context
+def list(ctx):
+    for k, v in db.all_builds():
+        print(f'key: {k} value: {v}')
