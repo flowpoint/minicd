@@ -6,6 +6,7 @@ from uuid import uuid4
 from typing import Union, Optional
 from abc import ABC, abstractmethod
 import os
+import signal
 
 import click
 import lmdb
@@ -79,31 +80,18 @@ class Repo:
                 "commit": str(self.commit),
                 "clonedir": str(self.clonedir)}
 
-
-# seed_uris = 'repouri'
-
-# cache 
-# caches crawler
-
-# crawlers = (seed) -> downloaded_commit
-# those get one or many commits from a seed
-
-# buildrules = (downloaded_commit) -> build
-
 class Build:
-    def __init__(self, repo: Repo, buildfn, reportfn):
+    def __init__(self, repo: Repo, buildfn):
         self.repo = repo
         self.state = 'created'
         self.buildfn = buildfn
-        self.reportfn = reportfn
 
     def run(self):
         try:
-            self.buildfn()
-            self.state = 'sucessful'
+            self.buildfn(self)
+            self.state = 'success'
         except:
             self.state = 'error'
-        self.reportfn(self)
 
     '''
     def start(self):
@@ -147,9 +135,14 @@ class BuildLMDB(BuildDB):
         key = commit
         with self.env.begin(write=False) as txn:
             res = txn.get(str(key).encode('utf-8'))
-            return res is not None
+            if res is not None:
+                state = json.loads(res.decode('utf-8'))['state']
+                return state != 'created'
+            else:
+                return False
 
-    def set_built(self, build: Build):
+    def save_build(self, build: Build):
+        print('saving build')
         key = build.repo.commit
         value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
@@ -192,12 +185,16 @@ class SimpleBuildRule(BuildRule):
         super().__init__()
 
     def get(self, repo: Repo) -> Build:
-        def buildfn():
+        def buildfn(build):
             commit = repo.commit
+
+            db.save_build(build)
 
             if db.was_built(commit):
                 print('commmit was already built, skipping')
                 return
+
+            print('wasnt built')
 
             repodir = db.get_new_builddir()
             repo.clone(repodir)
@@ -207,13 +204,12 @@ class SimpleBuildRule(BuildRule):
             cmd = f'cd {repo.clonedir} && ./ci.sh > >(tee -a ../stdout.log) 2> >(tee -a ../stderr.log >&2)'
             proc = sprun(cmd)
 
+            db.save_build(build)
+
             # report
             # cleanup
 
-        def reportfn(build):
-            db.set_built(build)
-
-        build = Build(repo, buildfn, reportfn)
+        build = Build(repo, buildfn)
 
         return build
 
@@ -226,14 +222,20 @@ def cli(ctx, config):
         configo = json.loads(f.read())
     ctx.obj = {'config': configo, 'configpath': config}
 
+signals = None
+
+def handler(signum, frame):
+    global signals 
+    print('term recieved, shutting down gracefully after the next build')
+    signals = 'term'
+
+signal.signal(signal.SIGTERM, handler)
 
 @cli.command()
 @click.pass_context
 def run(ctx):
     config = ctx.obj['config']
-
     seeds = config['seeds']
-    #seeds = ['/home/flowpoint/devel/testrepo']
     crawlers = [SimpleCrawler()]
     buildrules = [SimpleBuildRule()]
 
@@ -249,18 +251,16 @@ def run(ctx):
             builds.append(build)
 
     for build in builds:
-        build.run()
+        if signals is None:
+            build.run()
+        else:
+            break
 
-@cli.group()
-#@click.argument('cmd')
-@click.pass_context
-def seed(ctx):
-    pass
 
-@seed.command()
+@cli.command()
 @click.argument('seed')
 @click.pass_context
-def add(ctx, seed):
+def seed_add(ctx, seed):
     p = ctx.obj['configpath']
     nc = ctx.obj['config']
     if seed in nc['seeds']:
@@ -272,26 +272,29 @@ def add(ctx, seed):
     copyfile(nfp, p)
     os.remove(nfp)
 
+def padto(s, l):
+    return s + ' '*(l-len(s))
 
-@cli.group()
-#@click.argument('cmd')
+def tjoin(s):
+    return '| ' + ' | '.join(s) + ' |'
+
+@cli.command()
+@click.pass_context
+def config(ctx):
+    print(ctx.obj['configpath'])
+    print(ctx.obj['config'])
+
+@cli.command()
 @click.pass_context
 def builds(ctx):
-    pass
-
-@builds.command()
-#@click.argument('cmd')
-@click.pass_context
-def status(ctx):
+    fields = ['status', 'commit', 'repo']
+    sep = '----'
+    spacings = [7, 40, 40]
+    print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
+    print(tjoin([padto(sep,l) for l in spacings]))
     for k, v in db.all_builds():
         reponame = v['repo']['uri']
         commit = v['repo']['commit']
         state = v['state']
-        print(f'status: {state} repo: {reponame} commit {commit}')
-
-@builds.command()
-#@click.argument('cmd')
-@click.pass_context
-def list(ctx):
-    for k, v in db.all_builds():
-        print(f'key: {k} value: {v}')
+        fields = [state, commit, reponame]
+        print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
