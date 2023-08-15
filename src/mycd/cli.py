@@ -1,18 +1,18 @@
-import click
-from dataclasses import dataclass, asdict, field
 import json
 from pathlib import Path
 from shutil import copyfile, copytree, rmtree
 import subprocess
 from uuid import uuid4
-from typing import Union
-import lmdb
+from typing import Union, Optional
+from abc import ABC, abstractmethod
 
+import click
+import lmdb
 
 RepoName = str
 Uri = str
 
-def sprun(cmd):
+def sprun(cmd: str):
     print(f'running command: {cmd}')
     proc = subprocess.run(
             cmd,
@@ -32,37 +32,45 @@ class Commit:
         self.hash = hash_
         self.uri = uri
 
-class Repo:
-    def __init__(self, uri: Uri):
-        self.name = str(uuid4())
-        self.uri = uri
-        self.destdir = None
+    def dict(self):
+        return {"hash":self.hash, "uri": self.uri}
 
-    def clone(self, dest):
+class Repo:
+    def __init__(self, uri: Uri, name=str(uuid4()), clonedir=None):
+        self.uri = uri
+        self.name = name
+        self.clonedir : Optional[Path] = clonedir
+
+    def clone(self, dest: Path):
         ''' clones repo '''
         print('cloning repo')
 
-        self.destdir = Path(dest) / self.name
-        cmd = f'git clone {str(self.uri)} {self.destdir}',
-        if not self.destdir.exists():
+        self.clonedir = dest / self.name
+        cmd = f'git clone {str(self.uri)} {self.clonedir}'
+        if not self.clonedir.exists():
             sprun(cmd)
         else:
-            print(f'destdir exists, skipping clone')
+            print(f'clonedir exists, skipping clone')
 
     def checkout(self, branch: str):
         print('checking out branch')
-        cmd = f'cd {self.destdir} && git checkout {branch}'
+        cmd = f'cd {self.clonedir} && git checkout {branch}'
         sprun(cmd)
 
     def pull(self):
         print('pulling branch')
-        cmd = f'cd {self.destdir} && git pull'
+        cmd = f'cd {self.clonedir} && git pull'
         sprun(cmd)
 
     def get_branch_tip(self, branch: str):
-        cmd = f'cd {self.destdir} && git rev-parse {branch}'
+        cmd = f'cd {self.clonedir} && git rev-parse {branch}'
         proc = sprun(cmd)
         return Commit(proc.stdout, self.uri)
+
+    def dict(self):
+        return {"name":self.name, 
+                "uri": self.uri, 
+                "clonedir": self.clonedir}
 
 
 # seed_uris = 'repouri'
@@ -75,7 +83,52 @@ class Repo:
 
 # buildrules = (downloaded_commit) -> build
 
-class BuildDB:
+class Build:
+    def __init__(self, commit: Commit):
+        self.repo = Repo(commit.uri)
+        self.commit = commit
+        self.state = 'created'
+        db = BuildDB()
+        self.builddir = db.get_new_builddir()
+
+    def setup_builddir(self):
+        self.repo.clone(self.builddir)
+        self.repo.checkout(self.commit.hash)
+        print('setting up builddir')
+        #self.repo.clone(self.builddir)
+        #copytree(self.repo.clonedir, self.builddir)
+        pass
+
+    def cleanup(self):
+        print('cleaning up builddir')
+        #rmtree(self.builddir)
+
+    def run(self):
+        print('starting build')
+        self.state = 'setting_up'
+        self.setup_builddir()
+        self.state = 'running'
+
+        cmd = f'cd {self.repo.clonedir} && ./ci.sh'
+        proc = sprun(cmd)
+        self.state = 'cleaning_up'
+        self.cleanup()
+        self.state = 'finished'
+
+    def start(self):
+        pass
+
+    def pause(self):
+        pass
+    def resume(self):
+        pass
+    def cancel(self):
+        pass
+
+    def dict(self):
+        return {"repo": self.repo.dict(), "commit": self.commit.dict()}
+
+class BuildDB(ABC):
     def __init__(self):
         self.path = Path('/tmp/mycd_builddb')
 
@@ -97,63 +150,18 @@ class BuildLMDB(BuildDB):
             res = txn.get(str(key).encode('utf-8'))
             return res is not None
 
-    def set_built(self, commit: Commit):
-        key = commit.hash
-        value = '1'
+    def set_built(self, build: Build):
+        key = build.commit.hash
+        value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
             return txn.put(str(key).encode('utf-8'), str(value).encode('utf-8'))
 
 
-
-class Build:
-    def __init__(self, commit: Commit):
-        self.repo = Repo(commit.uri)
-        self.commit = commit
-        self.state = 'created'
-        self.builddir = None
-
-    def setup_builddir(self):
-        self.repo.clone(self.builddir)
-        self.repo.checkout(self.commit.hash)
-        print('setting up builddir')
-        #self.repo.clone(self.builddir)
-        #copytree(self.repo.destdir, self.builddir)
-        pass
-
-    def cleanup(self):
-        print('cleaning up builddir')
-        #rmtree(self.builddir)
-
-    def run(self):
-        db = BuildDB()
-        self.builddir = db.get_new_builddir()
-
-        print('starting build')
-        self.state = 'setting_up'
-        self.setup_builddir()
-        self.state = 'running'
-
-        cmd = f'cd {self.repo.destdir} && ./ci.sh'
-        proc = sprun(cmd)
-        self.state = 'cleaning_up'
-        self.cleanup()
-        self.state = 'finished'
-
-    def start(self):
-        pass
-
-    def pause(self):
-        pass
-    def resume(self):
-        pass
-    def cancel(self):
-        pass
-
-
-class Crawler:
+class Crawler(ABC):
     def __init__(self):
         pass
 
+    @abstractmethod
     def crawl(self, seed) -> Commit:
         pass
 
@@ -173,7 +181,7 @@ class SimpleCrawler(Crawler):
 
 
 
-class BuildRule:
+class BuildRule(ABC):
     def __init__(self):
         pass
 
@@ -201,11 +209,21 @@ class SimpleBuildRule(BuildRule):
         return buildfn
 
 
-@click.command()
-@click.option('--config', type=click.Path(dir_okay=False, file_okay=True))
-def main(config):
-    #Config.init_conf('testconf')
-    seeds = ['/home/flowpoint/devel/testrepo']
+@click.group()
+@click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default='/tmp/nano_build_delivery.json')
+@click.pass_context
+def cli(ctx, config):
+    ctx.obj = config
+    pass
+
+@cli.command()
+@click.pass_obj
+def run(config):
+    with open(config, 'r') as f:
+        config = json.loads(f.read())
+
+    seeds = config['seeds']
+    #seeds = ['/home/flowpoint/devel/testrepo']
     crawlers = [SimpleCrawler()]
     buildrules = [SimpleBuildRule()]
 

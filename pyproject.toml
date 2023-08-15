@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-mycd = "mycd.cli:main"
+mycd = "mycd.cli:cli"
 
 #[project.urls]
 #"Homepage" = "https://github.com/pypa/sampleproject"
