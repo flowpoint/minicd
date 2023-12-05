@@ -15,6 +15,13 @@ RepoName = str
 Uri = str
 Commit: str
 
+default_config = {
+        "seeds":[],
+        "crawlers":[],
+        "buildrules":[],
+        }
+
+
 def sprun(cmd: str):
     print(f'running command: {cmd}')
     proc = subprocess.run(
@@ -92,6 +99,7 @@ class Build:
         except Exception as e:
             print(e)
             self.state = 'error'
+            db.save_build(self)
 
     '''
     def start(self):
@@ -221,9 +229,7 @@ class SimpleBuildRule(BuildRule):
 @click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default='/tmp/nano_build_delivery.json')
 @click.pass_context
 def cli(ctx, config):
-    with open(config, 'r') as f:
-        configo = json.loads(f.read())
-    ctx.obj = {'config': configo, 'configpath': config}
+    ctx.obj = {'configpath': config}
 
 signals = None
 
@@ -234,10 +240,29 @@ def handler(signum, frame):
 
 signal.signal(signal.SIGTERM, handler)
 
+def get_config(ctx):
+    configp = Path(ctx.obj['configpath'])
+    if not configp.exists():
+        raise RuntimeError(f'config file doesnt exist at {configp}, maybe use init to create one')
+
+    with configp.open('r') as f:
+        config = json.loads(f.read())
+    return config
+
+@cli.command()
+@click.pass_context
+def init(ctx):
+        configp = ctx.obj['configpath']
+        print(f'creating default config at {configp}')
+        Path(configp).parent.mkdir(parents=True, exist_ok=True)
+        with open(configp, 'w') as f:
+            f.write(json.dumps(default_config))
+        print(default_config)
+
 @cli.command()
 @click.pass_context
 def run(ctx):
-    config = ctx.obj['config']
+    config = get_config(ctx)
     seeds = config['seeds']
     crawlers = [SimpleCrawler()]
     buildrules = [SimpleBuildRule()]
@@ -264,6 +289,7 @@ def run(ctx):
 @click.argument('seed')
 @click.pass_context
 def seed_add(ctx, seed):
+    config = get_config(ctx)
     p = ctx.obj['configpath']
     nc = ctx.obj['config']
     if seed in nc['seeds']:
@@ -284,8 +310,9 @@ def tjoin(s):
 @cli.command()
 @click.pass_context
 def config(ctx):
+    config = get_config(ctx)
     print(ctx.obj['configpath'])
-    print(ctx.obj['config'])
+    print(config)
 
 @cli.command()
 @click.pass_context

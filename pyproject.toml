@@ -19,7 +19,8 @@ classifiers = [
 keywords = ["key1"]
 license = {text = "MIT License"}
 dependencies = [
-    "click"
+    "click",
+    'lmdb'
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ dev = [
     'ipython',
     'python-lsp-server',
     'mypy',
-    'lmdb'
+    'pytest',
 ]
 
 [project.scripts]
