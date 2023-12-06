@@ -7,6 +7,7 @@ from typing import Union, Optional
 from abc import ABC, abstractmethod
 import os
 import signal
+import base64
 
 import click
 import lmdb
@@ -46,9 +47,9 @@ class Commit:
         return {"hash":str(self.hash), "uri": self.uri}
 
 class Repo:
-    def __init__(self, uri: Uri, name=str(uuid4()), clonedir=None, commit=None):
+    def __init__(self, uri: Uri, name=None, clonedir=None, commit=None):
         self.uri = uri
-        self.name = name
+        self.name = base64.b64encode(str(name).encode('utf-8')).decode('utf-8')
         self.clonedir : Optional[Path] = clonedir
         self.commit : Optional[Commit] = commit
 
@@ -76,6 +77,17 @@ class Repo:
         cmd = f'cd {self.clonedir} && git pull'
         sprun(cmd)
 
+    def all_branches(self):
+        cmd = f'cd {self.clonedir} && git branch -a --format "%(refname)"'
+        proc = sprun(cmd)
+        raise NotImplemented()
+        return proc.stdout.split('\n')
+    
+    def remote_branches(self):
+        cmd = f'git remote ls {self.uri}'
+        proc = sprun(cmd)
+        return proc.stdout.strip().split(' ')[-1]
+
     def get_branch_tip(self):
         cmd = f'cd {self.clonedir} && git log -n 1 --pretty=format:"%H"'
         proc = sprun(cmd)
@@ -92,6 +104,7 @@ class Build:
         self.repo = repo
         self.state = 'created'
         self.buildfn = buildfn
+        self.data = {}
 
     def run(self):
         try:
@@ -114,7 +127,7 @@ class Build:
     '''
 
     def dict(self):
-        return {"repo": self.repo.dict(), "buildfn":"", 'state':self.state}
+        return {"repo": self.repo.dict(), "buildfn":"", 'state':self.state, 'data':self.data}
 
 class BuildDB(ABC):
     def __init__(self):
@@ -124,7 +137,7 @@ class BuildDB(ABC):
         return self.path / str(uuid4())
 
     def get_new_repodir(self):
-        return self.path / str(uuid4())
+        return self.path #/ str(uuid4())
 
 
 class BuildLMDB(BuildDB):
@@ -174,15 +187,27 @@ class SimpleCrawler(Crawler):
     def crawl(self, seed) -> Repo:
         r = Repo(seed)
         repodir = db.get_new_repodir()
-        r.clone(repodir)
-        r.checkout('main')
+        try:
+            r.clone(repodir)
+            r.pull()
+        except Exception as e:
+            print(f'cloning repo: {r} failed with {e}')
+        try:
+            r.checkout('main')
+        except Exception as e:
+            print(f'checkout out main for repo: {r} failed with {e}')
+
         commit = r.commit
-        rmtree(repodir)
+        print(f'removing repodir after crawling {repodir}')
+        #rmtree(repodir)
         return r
 
 
 class BuildRule(ABC):
     def __init__(self):
+        pass
+
+    def match(self, commit):
         pass
 
     def get(self, repo):
@@ -192,7 +217,12 @@ class SimpleBuildRule(BuildRule):
     def __init__(self):
         super().__init__()
 
+    def match(self, commit):
+        return True
+
     def get(self, repo: Repo) -> Build:
+        ''' creates a Build with a build function 
+        '''
         def buildfn(build):
             commit = repo.commit
 
@@ -202,7 +232,6 @@ class SimpleBuildRule(BuildRule):
 
             build.state = 'running'
             db.save_build(build)
-
 
             print('wasnt built')
 
@@ -255,6 +284,8 @@ def init(ctx):
         configp = ctx.obj['configpath']
         print(f'creating default config at {configp}')
         Path(configp).parent.mkdir(parents=True, exist_ok=True)
+        if Path(configp).exists():
+            raise RuntimeError(f'config already exists at {configp}')
         with open(configp, 'w') as f:
             f.write(json.dumps(default_config))
         print(default_config)
@@ -272,11 +303,16 @@ def run(ctx):
         for cr in crawlers:
             commits.append(cr.crawl(s))
 
+    # the first buildrule that matches is used
+    # this is because of better efficiency
+    # only repos without any matching rules need to run through all rules
     builds = []
     for cm in commits:
         for rule in buildrules:
-            build = rule.get(cm)
-            builds.append(build)
+            if rule.match(cm):
+                build = rule.get(cm)
+                builds.append(build)
+                break
 
     for build in builds:
         if signals is None:
@@ -291,7 +327,7 @@ def run(ctx):
 def seed_add(ctx, seed):
     config = get_config(ctx)
     p = ctx.obj['configpath']
-    nc = ctx.obj['config']
+    nc = config
     if seed in nc['seeds']:
         print('seed already exists, aborting')
     nc['seeds'] = nc['seeds'] + [seed]
