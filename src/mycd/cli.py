@@ -12,11 +12,10 @@ import base64
 import click
 import lmdb
 
-RepoName = str
 Uri = str
-Commit: str
 
 default_config = {
+        "db_path":'/tmp/mycd_builddb',
         "seeds":[],
         "crawlers":[],
         "buildrules":[],
@@ -39,17 +38,21 @@ def sprun(cmd: str):
 
 
 class Commit:
-    def __init__(self, hash_, uri):
+    def __init__(self, hash_, repo):
         self.hash = hash_
-        self.uri = uri
+        self.repo = repo
 
     def dict(self):
-        return {"hash":str(self.hash), "uri": self.uri}
+        return {"hash":str(self.hash), "repo": self.repo}
 
 class Repo:
     def __init__(self, uri: Uri, name=None, clonedir=None, commit=None):
         self.uri = uri
-        self.name = base64.b64encode(str(name).encode('utf-8')).decode('utf-8')
+        if name is None:
+            self.name = base64.b32encode(str(uri).encode('utf-8')).decode('utf-8')
+        else:
+            self.name = name
+
         self.clonedir : Optional[Path] = clonedir
         self.commit : Optional[Commit] = commit
 
@@ -91,7 +94,8 @@ class Repo:
     def get_branch_tip(self):
         cmd = f'cd {self.clonedir} && git log -n 1 --pretty=format:"%H"'
         proc = sprun(cmd)
-        return proc.stdout
+        c_hash = proc.stdout
+        return Commit(c_hash, self)
 
     def dict(self):
         return {"name":self.name, 
@@ -100,8 +104,8 @@ class Repo:
                 "clonedir": str(self.clonedir)}
 
 class Build:
-    def __init__(self, repo: Repo, buildfn):
-        self.repo = repo
+    def __init__(self, commit: Commit, buildfn):
+        self.commit = commit
         self.state = 'created'
         self.buildfn = buildfn
         self.data = {}
@@ -127,23 +131,29 @@ class Build:
     '''
 
     def dict(self):
-        return {"repo": self.repo.dict(), "buildfn":"", 'state':self.state, 'data':self.data}
+        return {"commit": self.commit.dict(), "buildfn":"", 'state':self.state, 'data':self.data}
 
 class BuildDB(ABC):
     def __init__(self):
-        self.path = Path('/tmp/mycd_builddb')
+        pass
 
-    def get_new_builddir(self):
-        return self.path / str(uuid4())
+    def load(self, path):
+        self.path = Path(path)
+        self.env = lmdb.open(str(self.path))
 
-    def get_new_repodir(self):
-        return self.path #/ str(uuid4())
+    @property
+    def builddir(self):
+        return self.path / 'builds' #/ str(uuid4())
+
+    @property
+    def repodir(self):
+        return self.path / 'repos'
 
 
 class BuildLMDB(BuildDB):
     def __init__(self):
         super().__init__()
-        self.env = lmdb.open(str(self.path))
+
 
     def all_builds(self):
         with self.env.begin(write=False) as txn:
@@ -164,7 +174,7 @@ class BuildLMDB(BuildDB):
 
     def save_build(self, build: Build):
         print(f'saving build {build.repo.uri} {build.repo.commit} {build.state}')
-        key = build.repo.commit
+        key = build.commit.hash
         value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
             return txn.put(str(key).encode('utf-8'), str(value).encode('utf-8'))
@@ -184,9 +194,9 @@ class SimpleCrawler(Crawler):
     def __init__(self):
         super().__init__()
     
-    def crawl(self, seed) -> Repo:
+    def crawl(self, seed) -> [Commit]:
         r = Repo(seed)
-        repodir = db.get_new_repodir()
+        repodir = db.repodir
         try:
             r.clone(repodir)
             r.pull()
@@ -200,7 +210,7 @@ class SimpleCrawler(Crawler):
         commit = r.commit
         print(f'removing repodir after crawling {repodir}')
         #rmtree(repodir)
-        return r
+        return [commit]
 
 
 class BuildRule(ABC):
@@ -220,13 +230,11 @@ class SimpleBuildRule(BuildRule):
     def match(self, commit):
         return True
 
-    def get(self, repo: Repo) -> Build:
+    def get(self, commit: Commit) -> Build:
         ''' creates a Build with a build function 
         '''
         def buildfn(build):
-            commit = repo.commit
-
-            if db.was_built(commit):
+            if db.was_built(commit.hash):
                 print('commmit was already built, skipping')
                 return
 
@@ -235,9 +243,13 @@ class SimpleBuildRule(BuildRule):
 
             print('wasnt built')
 
-            repodir = db.get_new_builddir()
+            # copy repo to builddir
+            repodir = db.builddir
+            repo = commit.repo
             repo.clone(repodir)
-            repo.checkout(commit)
+            repo.checkout(commit.hash)
+
+            # build the commit
 
             # run the ci script and write the logs to the build dir above the repo directory
             cmd = f'cd {repo.clonedir} && ./ci.sh > >(tee -a ../stdout.log) 2> >(tee -a ../stderr.log >&2)'
@@ -249,7 +261,7 @@ class SimpleBuildRule(BuildRule):
             # report
             # cleanup
 
-        build = Build(repo, buildfn)
+        build = Build(commit, buildfn)
 
         return build
 
@@ -278,6 +290,10 @@ def get_config(ctx):
         config = json.loads(f.read())
     return config
 
+def get_db(config):
+    db.load(config['db_path'])
+    return db
+
 @cli.command()
 @click.pass_context
 def init(ctx):
@@ -294,6 +310,8 @@ def init(ctx):
 @click.pass_context
 def run(ctx):
     config = get_config(ctx)
+    db = get_db(config)
+
     seeds = config['seeds']
     crawlers = [SimpleCrawler()]
     buildrules = [SimpleBuildRule()]
@@ -301,7 +319,7 @@ def run(ctx):
     commits = []
     for s in seeds:
         for cr in crawlers:
-            commits.append(cr.crawl(s))
+            commits += cr.crawl(s)
 
     # the first buildrule that matches is used
     # this is because of better efficiency
@@ -347,12 +365,16 @@ def tjoin(s):
 @click.pass_context
 def config(ctx):
     config = get_config(ctx)
-    print(ctx.obj['configpath'])
-    print(config)
+    configpath = ctx.obj['configpath']
+    print(f'config at path: {configpath}')
+    print(f'config contents: \n {config}')
 
 @cli.command()
 @click.pass_context
 def builds(ctx):
+    config = get_config(ctx)
+    db = get_db(config)
+
     fields = ['status', 'commit', 'repo']
     sep = '----'
     spacings = [7, 42, 40]
