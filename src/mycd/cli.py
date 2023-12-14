@@ -80,6 +80,11 @@ class Repo:
         cmd = f'cd {self.clonedir} && git pull'
         sprun(cmd)
 
+    def fetch(self):
+        print('pulling branch')
+        cmd = f'cd {self.clonedir} && git fetch'
+        sprun(cmd)
+
     def all_branches(self):
         cmd = f'cd {self.clonedir} && git branch -a --format "%(refname)"'
         proc = sprun(cmd)
@@ -202,7 +207,7 @@ class SimpleCrawler(Crawler):
         except Exception as e:
             print(f'cloning repo: {r} failed with {e}')
         try:
-            r.pull()
+            r.fetch()
             r.checkout('main')
         except Exception as e:
             print(f'checkout out main for repo: {r} failed with {e}')
@@ -247,7 +252,7 @@ class SimpleBuildRule(BuildRule):
             repodir = db.builddir
             repo = commit.repo
             repo.clone(repodir)
-            repo.pull()
+            repo.fetch()
             repo.checkout(commit.hash)
 
             # build the commit
