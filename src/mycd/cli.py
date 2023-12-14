@@ -43,7 +43,7 @@ class Commit:
         self.repo = repo
 
     def dict(self):
-        return {"hash":str(self.hash), "repo": self.repo}
+        return {"hash":str(self.hash), "repo": self.repo.dict()}
 
 class Repo:
     def __init__(self, uri: Uri, name=None, clonedir=None, commit=None):
@@ -173,7 +173,7 @@ class BuildLMDB(BuildDB):
                 return False
 
     def save_build(self, build: Build):
-        print(f'saving build {build.repo.uri} {build.repo.commit} {build.state}')
+        print(f'saving build {build.commit.repo.uri} {build.commit.hash} {build.state}')
         key = build.commit.hash
         value = json.dumps(build.dict())
         with self.env.begin(write=True) as txn:
@@ -381,8 +381,8 @@ def builds(ctx):
     print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
     print(tjoin([padto(sep,l) for l in spacings]))
     for k, v in db.all_builds():
-        reponame = v['repo']['uri']
-        commit = v['repo']['commit']
+        reponame = v['commit']['repo']['uri']
+        commit = v['commit']['repo']['commit']
         state = v['state']
         fields = [state, commit, reponame]
         print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
