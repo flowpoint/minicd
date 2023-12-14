@@ -199,10 +199,10 @@ class SimpleCrawler(Crawler):
         repodir = db.repodir
         try:
             r.clone(repodir)
-            r.pull()
         except Exception as e:
             print(f'cloning repo: {r} failed with {e}')
         try:
+            r.pull()
             r.checkout('main')
         except Exception as e:
             print(f'checkout out main for repo: {r} failed with {e}')
@@ -247,6 +247,7 @@ class SimpleBuildRule(BuildRule):
             repodir = db.builddir
             repo = commit.repo
             repo.clone(repodir)
+            repo.pull()
             repo.checkout(commit.hash)
 
             # build the commit
