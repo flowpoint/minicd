@@ -216,6 +216,11 @@ class SimpleCrawler(Crawler):
             print(f'cloning repo: {r} failed with {e}')
         try:
             r.fetch()
+            # pull is needed because we clone this repo locally again and else
+            # and the pull from the real origin wont work
+            # because we wont commit to this clone, the pull should normally be able to fast forward
+            # if it doesnt, it is because origin used git in a bad way that resulted in conflicts and possibly overwrote data
+            r.pull()
             r.checkout('main')
         except Exception as e:
             print(f'checkout out main for repo: {r} failed with {e}')
@@ -248,7 +253,7 @@ class SimpleBuildRule(BuildRule):
         '''
         def buildfn(build):
             if db.was_built(commit.hash):
-                print('commmit was already built, skipping')
+                print(f'commmit {commit.hash} was already built, skipping')
                 return
 
             build.state = 'running'
@@ -263,6 +268,7 @@ class SimpleBuildRule(BuildRule):
             repodir.mkdir(parents=True, exist_ok=True)
             repo.clone(repodir)
             repo.fetch()
+            #repo.pull()
             repo.checkout(commit.hash)
 
             # build the commit
