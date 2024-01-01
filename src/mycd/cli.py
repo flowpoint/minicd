@@ -49,7 +49,8 @@ class Repo:
     def __init__(self, uri: Uri, name=None, clonedir=None, commit=None):
         self.uri = uri
         if name is None:
-            self.name = base64.b32encode(str(uri).encode('utf-8')).decode('utf-8')
+            # = is the padding in base32, we remove it
+            self.name = base64.b32encode(str(uri).encode('utf-8')).decode('utf-8').replace("=",'')
         else:
             self.name = name
 
@@ -61,7 +62,7 @@ class Repo:
         print('cloning repo')
 
         self.clonedir = dest / self.name
-        cmd = f'git clone {str(self.uri)} {self.clonedir}'
+        cmd = f'git clone {str(self.uri)} {str(self.clonedir)}'
         if not self.clonedir.exists():
             sprun(cmd)
         else:
@@ -213,7 +214,7 @@ class SimpleCrawler(Crawler):
             print(f'checkout out main for repo: {r} failed with {e}')
 
         commit = r.commit
-        print(f'removing repodir after crawling {repodir}')
+        #print(f'removing repodir after crawling {repodir}')
         #rmtree(repodir)
         return [commit]
 
@@ -249,8 +250,10 @@ class SimpleBuildRule(BuildRule):
             print('wasnt built')
 
             # copy repo to builddir
-            repodir = db.builddir
             repo = commit.repo
+
+            repodir = Path(db.builddir) / str(commit.hash)#repo.name
+            repodir.mkdir(parents=True, exist_ok=True)
             repo.clone(repodir)
             repo.fetch()
             repo.checkout(commit.hash)
