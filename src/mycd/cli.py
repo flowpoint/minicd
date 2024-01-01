@@ -14,6 +14,8 @@ import lmdb
 
 Uri = str
 
+DEBUG=False
+
 default_config = {
         "db_path":'/tmp/mycd_builddb',
         "seeds":[],
@@ -31,19 +33,24 @@ def sprun(cmd: str):
             capture_output=True
             )
 
-    print(f'stdout: {proc.stdout}')
-    print(f'stderr: {proc.stderr}')
+    if DEBUG:
+        print(f'stdout: {proc.stdout}')
+        print(f'stderr: {proc.stderr}')
     proc.check_returncode()
     return proc
 
 
 class Commit:
     def __init__(self, hash_, repo):
-        self.hash = hash_
+        self.hash = str(hash_)
         self.repo = repo
 
     def dict(self):
         return {"hash":str(self.hash), "repo": self.repo.dict()}
+
+    def __str__(self):
+        return self.hash
+
 
 class Repo:
     def __init__(self, uri: Uri, name=None, clonedir=None, commit=None):
@@ -391,7 +398,7 @@ def builds(ctx):
     print(tjoin([padto(sep,l) for l in spacings]))
     for k, v in db.all_builds():
         reponame = v['commit']['repo']['uri']
-        commit = v['commit']['repo']['commit']
+        commit = v['commit']['hash']
         state = v['state']
         fields = [state, commit, reponame]
         print(tjoin([padto(s,l) for s,l in zip(fields, spacings)]))
