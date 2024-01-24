@@ -10,7 +10,9 @@ import signal
 import base64
 
 import click
-import lmdb
+import lmdb # type: ignore
+
+from typing import Dict, List
 
 Uri = str
 
@@ -122,7 +124,7 @@ class Build:
         self.commit = commit
         self.state = 'created'
         self.buildfn = buildfn
-        self.data = {}
+        self.data : Dict = {}
 
     def run(self):
         try:
@@ -200,7 +202,7 @@ class Crawler(ABC):
         pass
 
     @abstractmethod
-    def crawl(self, seed) -> Repo:
+    def crawl(self, seed) -> List[Commit]:
         pass
 
 class SimpleCrawler(Crawler):
@@ -208,13 +210,14 @@ class SimpleCrawler(Crawler):
     def __init__(self):
         super().__init__()
     
-    def crawl(self, seed) -> [Commit]:
+    def crawl(self, seed) -> List[Commit]:
         r = Repo(seed)
         repodir = db.repodir
         try:
             r.clone(repodir)
         except Exception as e:
             print(f'cloning repo: {r} failed with {e}')
+
         try:
             r.fetch()
             # pull is needed because we clone this repo locally again and else
@@ -226,10 +229,15 @@ class SimpleCrawler(Crawler):
         except Exception as e:
             print(f'checkout out main for repo: {r} failed with {e}')
 
-        commit = r.commit
+        if r.commit is None:
+            commits = []
+        else:
+            commit = r.commit
+            commits = [commit]
+
         #print(f'removing repodir after crawling {repodir}')
         #rmtree(repodir)
-        return [commit]
+        return commits
 
 
 class BuildRule(ABC):

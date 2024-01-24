@@ -31,6 +31,11 @@ dev = [
     'pytest',
 ]
 
+test = [
+    'pytest',
+    'mypy'
+    ]
+
 [project.scripts]
 minicd = "minicd.cli:cli"
 
