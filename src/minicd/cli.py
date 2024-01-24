@@ -16,13 +16,14 @@ Uri = str
 
 DEBUG=False
 
+homedir = Path(os.environ['HOME'])
+
 default_config = {
-        "db_path":'/tmp/mycd_builddb',
+        "db_path": str( homedir / 'minicd_builddb'),
         "seeds":[],
         "crawlers":[],
         "buildrules":[],
         }
-
 
 def sprun(cmd: str):
     print(f'running command: {cmd}')
@@ -289,7 +290,7 @@ class SimpleBuildRule(BuildRule):
 
 
 @click.group()
-@click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default='/tmp/nano_build_delivery.json')
+@click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default=str(homedir/ 'minicd/config.json'))
 @click.pass_context
 def cli(ctx, config):
     ctx.obj = {'configpath': config}

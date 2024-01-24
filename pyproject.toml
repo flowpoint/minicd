@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mycd"
+name = "minicd"
 version = "0.0.1"
 authors = [
   { name="flowpoint", email="flowpoint@protonmail.com" },
@@ -32,7 +32,7 @@ dev = [
 ]
 
 [project.scripts]
-mycd = "mycd.cli:cli"
+minicd = "minicd.cli:cli"
 
 #[project.urls]
 #"Homepage" = "https://github.com/pypa/sampleproject"
