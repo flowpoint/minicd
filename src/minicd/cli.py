@@ -298,7 +298,7 @@ class SimpleBuildRule(BuildRule):
 
 
 @click.group()
-@click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default=str(homedir/ 'minicd/config.json'))
+@click.option('--config', type=click.Path(dir_okay=False, file_okay=True), default=str(homedir/ '.minicd_config.json'))
 @click.pass_context
 def cli(ctx, config):
     ctx.obj = {'configpath': config}
